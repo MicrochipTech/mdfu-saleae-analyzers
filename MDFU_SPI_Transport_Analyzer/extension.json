@@ -1,0 +1,13 @@
+{
+  "name": "MDFU SPI",
+  "apiVersion": "1.0.0",
+  "author": "Lars Häring",
+  "version": "0.0.1",
+  "description": "MDFU SPI transport analyzer",
+  "extensions": {
+    "MDFU SPI": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "mdfu_spi_transport_analyzer.MdfuSpiTransportAnalyzer"
+    }
+  }
+}
