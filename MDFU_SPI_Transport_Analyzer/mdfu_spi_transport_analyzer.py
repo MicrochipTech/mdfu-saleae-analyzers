@@ -131,7 +131,7 @@ class ResponseDecoder(Decoder):
                                                time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
                                                time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
                                                {'labelText': label_text}))
-            label_text = "RESPONSE PREFIX"
+            label_text = "PREFIX (RSP)"
             return_frames.append(AnalyzerFrame('mdfu_frame',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
                                                time[self.RSP_FRAME_PREFIX_END]["end"],
@@ -241,7 +241,7 @@ class ResponseStatusDecoder(Decoder):
                                                time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
                                                time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
                                                {'labelText': label_text}))
-            label_text = "RESPONSE PREFIX"
+            label_text = "PREFIX (LEN)"
             return_frames.append(AnalyzerFrame('mdfu_frame',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
                                                time[self.RSP_FRAME_PREFIX_END]["end"],
