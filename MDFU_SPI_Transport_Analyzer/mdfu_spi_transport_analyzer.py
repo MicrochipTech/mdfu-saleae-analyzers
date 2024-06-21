@@ -5,7 +5,7 @@ from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #p
 from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, verify_checksum
 
 # Enable/disable printing to Saleae terminal in debug_print function
-DEBUG = False
+DEBUG = True
 
 def debug_print(txt):
     """Print debug messages to Saleae terminal
@@ -65,13 +65,14 @@ class ResponseDecoder(Decoder):
     FRAME_DUMMY_BYTES_START = 1
     FRAME_DUMMY_BYTES_END = -1
 
-    RSP_FRAME_PREFIX_START = 0
+    RSP_FRAME_DUMMY_BYTE_START = 0
+    RSP_FRAME_PREFIX_START = 1
     RSP_FRAME_PREFIX_END = 3
     RSP_FRAME_RSP_DATA_START = 4
     RSP_FRAME_RSP_DATA_END = -3
     RSP_FRAME_CRC_START = -2
     RSP_FRAME_CRC_END = -1
-    RSP_FRAME_PREFIX = bytes("RSP.", encoding="ascii")
+    RSP_FRAME_PREFIX = bytes("RSP", encoding="ascii")
 
     def decode_tx(self, tx, time):
         """Decode MOSI transaction data
@@ -114,12 +115,22 @@ class ResponseDecoder(Decoder):
         """
         return_frames = []
         if rx[self.RSP_FRAME_PREFIX_START: self.RSP_FRAME_PREFIX_END + 1] != self.RSP_FRAME_PREFIX:
+            label_text = "DUMMY BYTE"
+            return_frames.append(AnalyzerFrame('mdfu_frame',
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
+                                               {'labelText': label_text}))
             label_text = "No response from client"
             return_frames.append(AnalyzerFrame('mdfu_frame',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
                                                time[self.RSP_FRAME_CRC_END]["end"],
                                                {'labelText': label_text}))
         else:
+            label_text = "DUMMY BYTE"
+            return_frames.append(AnalyzerFrame('mdfu_frame',
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
+                                               {'labelText': label_text}))
             label_text = "RESPONSE PREFIX"
             return_frames.append(AnalyzerFrame('mdfu_frame',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
@@ -155,7 +166,8 @@ class ResponseStatusDecoder(Decoder):
     FRAME_DUMMY_BYTES_START = 1
     FRAME_DUMMY_BYTES_END = 7
 
-    RSP_FRAME_PREFIX_START = 0
+    RSP_FRAME_DUMMY_BYTE_START = 0
+    RSP_FRAME_PREFIX_START = 1
     RSP_FRAME_PREFIX_END = 3
     RSP_FRAME_RSP_LENGTH_START = 4
     RSP_FRAME_RSP_LENGTH_END = 5
@@ -163,7 +175,7 @@ class ResponseStatusDecoder(Decoder):
     RSP_FRAME_CRC_END = 7
 
     FRAME_SIZE = 8
-    RSP_FRAME_PREFIX = bytes("LEN-", encoding="ascii")
+    RSP_FRAME_PREFIX = bytes("LEN", encoding="ascii")
 
     def decode_tx(self, tx, time):
         """Decode MOSI transaction data
@@ -208,7 +220,12 @@ class ResponseStatusDecoder(Decoder):
         """
         return_frames = []
         if rx[self.RSP_FRAME_PREFIX_START: self.RSP_FRAME_PREFIX_END + 1] != self.RSP_FRAME_PREFIX:
-            label_text = "No response from client"
+            label_text = "DUMMY BYTE"
+            return_frames.append(AnalyzerFrame('mdfu_frame',
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
+                                               {'labelText': label_text}))
+            label_text = "PREFIX (invalid)"
             return_frames.append(AnalyzerFrame('mdfu_frame',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
                                                time[self.RSP_FRAME_PREFIX_END]["end"],
@@ -219,6 +236,11 @@ class ResponseStatusDecoder(Decoder):
                                                time[self.RSP_FRAME_CRC_END]["end"],
                                                {'labelText': label_text}))
         else:
+            label_text = "DUMMY BYTE"
+            return_frames.append(AnalyzerFrame('mdfu_frame',
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
+                                               {'labelText': label_text}))
             label_text = "RESPONSE PREFIX"
             return_frames.append(AnalyzerFrame('mdfu_frame',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
@@ -380,7 +402,7 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
                 debug_print("Decoding command")
                 return self.command_decoder.decode(self.txbuf, self.rxbuf, self.time)
             if self.READ == self.txbuf[0]:
-                if ord("R") == self.rxbuf[0]:
+                if ord("R") == self.rxbuf[1]:
                     debug_print("Decoding response")
                     return_frames = self.response_decoder.decode(self.txbuf, self.rxbuf, self.time)
                 else:
