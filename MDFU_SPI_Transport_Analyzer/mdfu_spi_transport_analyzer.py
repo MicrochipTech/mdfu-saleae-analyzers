@@ -1,8 +1,7 @@
 """
 Saleae high level analyzer for MDFU SPI transport
 """
-from enum import Enum
-from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #pylint: disable=import-error,
+from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #pylint: disable=import-error
 from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, verify_checksum
 
 # Enable/disable printing to Saleae terminal in debug_print function
@@ -16,14 +15,6 @@ def debug_print(txt):
     if DEBUG:
         print(txt)
 
-class MdfuSpiTransactionState(Enum):
-    """SPI transaction states for MDFU transport
-    """
-    CMD = 0
-    RESPONSE_STATUS = 1
-    RESPONSE = 2
-    RESPONSE_STATUS_POLLING = 3
-
 class DecodingError(Exception):
     """Exception for errors during protocol decoding
     """
@@ -32,6 +23,41 @@ class Decoder():
     """Common SPI transport decoder class"""
     WRITE = 0x11
     READ = 0x55
+    def __init__(self, trace="mosi"):
+        """Command decoder initialization
+
+        :param trace: Configuration to decode either MISO or MOSI, 
+        valid values are "mosi" and "miso", defaults to "mosi"
+        :type trace: str, optional
+        """
+        if trace not in ("miso", "mosi"):
+            raise ValueError(f"{trace} is not a valid setting. Allowed values are miso and mosi")
+        self.trace = trace
+
+    def decode(self, tx, rx, time):
+        """Decode MOSI/MOSI transaction data based on trace settings
+
+        :param tx: Buffer containing MOSI bytes
+        :type tx: bytes, bytearray
+        :param rx: Buffer containing MISO bytes
+        :type rx: bytes, bytearray
+        :param time: Timestamps for MOSI/MOSI bytes
+        :type time: list[dict(str:datetime)]
+        :raises DecodingError: When encountering a decoding error
+        :return: List of Saleae analyzer frames containing decoded data
+        :rtype: list[AnalyzerFrame]
+        """
+        if self.trace == "mosi":
+            return self.decode_tx(tx, time)
+        if self.trace == "miso":
+            return self.decode_rx(rx, time)
+        return []
+
+    def decode_tx(self, tx, time):
+        """Placeholder for decoder implementation override function"""
+
+    def decode_rx(self, rx, time):
+        """Placeholder for decoder implementation override function"""
 
 class ResponseDecoder(Decoder):
     """MDFU SPI transport response decoder"""
@@ -45,16 +71,7 @@ class ResponseDecoder(Decoder):
     RSP_FRAME_RSP_DATA_END = -3
     RSP_FRAME_CRC_START = -2
     RSP_FRAME_CRC_END = -1
-    RSP_FRAME_PREFIX = bytes("MDFU", encoding="ascii")
-
-    def __init__(self, trace="mosi"):
-        """Decoder initialization
-
-        :param trace: Configuration to decode either MISO or MOSI, 
-        valid values are "mosi" and "miso", defaults to "mosi"
-        :type trace: str, optional
-        """
-        self.trace = trace
+    RSP_FRAME_PREFIX = bytes("RSP.", encoding="ascii")
 
     def decode_tx(self, tx, time):
         """Decode MOSI transaction data
@@ -83,25 +100,6 @@ class ResponseDecoder(Decoder):
                                            time[self.FRAME_DUMMY_BYTES_END]["end"],
                                            {'labelText': label_text}))
         return return_frames
-
-    def decode(self, tx, rx, time):
-        """Decode MOSI/MOSI transaction data based on trace settings
-
-        :param tx: Buffer containing MOSI bytes
-        :type tx: bytes, bytearray
-        :param rx: Buffer containing MISO bytes
-        :type rx: bytes, bytearray
-        :param time: Timestamps for MOSI/MOSI bytes
-        :type time: list[dict(str:datetime)]
-        :raises DecodingError: When encountering a decoding error
-        :return: List of Saleae analyzer frames containing decoded data
-        :rtype: list[AnalyzerFrame]
-        """
-        if self.trace == "mosi":
-            return self.decode_tx(tx, time)
-        if self.trace == "miso":
-            return self.decode_rx(rx, time)
-        return []
 
     def decode_rx(self, rx, time):
         """Decode MISO transaction data
@@ -165,18 +163,7 @@ class ResponseStatusDecoder(Decoder):
     RSP_FRAME_CRC_END = 7
 
     FRAME_SIZE = 8
-    RSP_FRAME_PREFIX = bytes("MDFU", encoding="ascii")
-
-    def __init__(self, trace="mosi"):
-        """Command decoder initialization
-
-        :param trace: Configuration to decode either MISO or MOSI, 
-        valid values are "mosi" and "miso", defaults to "mosi"
-        :type trace: str, optional
-        """
-        if trace not in ("miso", "mosi"):
-            raise ValueError(f"{trace} is not a valid setting. Allowed values are miso and mosi")
-        self.trace = trace
+    RSP_FRAME_PREFIX = bytes("LEN-", encoding="ascii")
 
     def decode_tx(self, tx, time):
         """Decode MOSI transaction data
@@ -207,25 +194,6 @@ class ResponseStatusDecoder(Decoder):
                                            time[self.FRAME_DUMMY_BYTES_END]["end"],
                                            {'labelText': label_text}))
         return return_frames
-
-    def decode(self, tx, rx, time):
-        """Decode MOSI/MOSI transaction data based on trace settings
-
-        :param tx: Buffer containing MOSI bytes
-        :type tx: bytes, bytearray
-        :param rx: Buffer containing MISO bytes
-        :type rx: bytes, bytearray
-        :param time: Timestamps for MOSI/MOSI bytes
-        :type time: list[dict(str:datetime)]
-        :raises DecodingError: When encountering a decoding error
-        :return: List of Saleae analyzer frames containing decoded data
-        :rtype: list[AnalyzerFrame]
-        """
-        if self.trace == "mosi":
-            return self.decode_tx(tx, time)
-        if self.trace == "miso":
-            return self.decode_rx(rx, time)
-        return []
 
     def decode_rx(self, rx, time):
         """Decode MISO transaction data
@@ -288,25 +256,10 @@ class CmdDecoder(Decoder):
     FRAME_WRITE_PREFIX_LEN = 1
     FRAME_CRC_LEN = 2
 
-    RSP_FRAME_PREFIX_START = 0
-    RSP_FRAME_PREFIX_END = 3
-    RSP_FRAME_DUMMY_BYTES_START = 4
+    RSP_FRAME_DUMMY_BYTES_START = 0
     RSP_FRAME_DUMMY_BYTES_END = -1
 
-    RSP_FRAME_PREFIX = bytes("MDFU", encoding="ascii")
-
-    def __init__(self, trace="mosi"):
-        """Command decoder initialization
-
-        :param trace: Configuration to decode either MISO or MOSI, 
-        valid values are "mosi" and "miso", defaults to "mosi"
-        :type trace: str, optional
-        """
-        if trace not in ("miso", "mosi"):
-            raise ValueError(f"{trace} is not a valid setting. Allowed values are miso and mosi")
-        self.trace = trace
-
-    def decode_rx(self, rx, time):
+    def decode_rx(self, rx, time):#pylint: disable=unused-argument
         """Decode MISO transaction data
 
         :param tx: Buffer containing MISO bytes
@@ -318,14 +271,6 @@ class CmdDecoder(Decoder):
         :rtype: list[AnalyzerFrame]
         """
         return_frames = []
-        if rx[0:self.RSP_FRAME_DUMMY_BYTES_START] != self.RSP_FRAME_PREFIX:
-            label_text = "No response from client"
-        else:
-            label_text = "CMD RESPONSE PREFIX"
-        return_frames.append(AnalyzerFrame('mdfu_frame',
-                                           time[self.RSP_FRAME_PREFIX_START]["start"],
-                                           time[self.RSP_FRAME_PREFIX_END]["end"],
-                                           {'labelText': label_text}))
 
         label_text = "DUMMY BYTES"
         return_frames.append(AnalyzerFrame('mdfu_frame',
@@ -333,25 +278,6 @@ class CmdDecoder(Decoder):
                                            time[self.RSP_FRAME_DUMMY_BYTES_END]["end"],
                                            {'labelText': label_text}))
         return return_frames
-
-    def decode(self, tx, rx, time):
-        """Decode MOSI/MOSI transaction data based on trace settings
-
-        :param tx: Buffer containing MOSI bytes
-        :type tx: bytes, bytearray
-        :param rx: Buffer containing MISO bytes
-        :type rx: bytes, bytearray
-        :param time: Timestamps for MOSI/MOSI bytes
-        :type time: list[dict(str:datetime)]
-        :raises DecodingError: When encountering a decoding error
-        :return: List of Saleae analyzer frames containing decoded data
-        :rtype: list[AnalyzerFrame]
-        """
-        if self.trace == "mosi":
-            return self.decode_tx(tx, time)
-        if self.trace == "miso":
-            return self.decode_rx(rx, time)
-        return []
 
     def decode_tx(self, tx, time):
         """Decode MOSI transaction data
@@ -415,11 +341,10 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
 
     def __init__(self):
         """High level analyzer initialization"""
-        self.state = MdfuSpiTransactionState.CMD
         self.spi_cs = False
-        self.decoder = None
-        self.first_byte = True
-        self.trace = self.trace_setting
+        self.response_decoder = ResponseDecoder(trace=self.trace_setting)
+        self.response_status_decoder = ResponseStatusDecoder(trace=self.trace_setting)
+        self.command_decoder = CmdDecoder(trace=self.trace_setting)
         self.txbuf = bytearray()
         self.rxbuf = bytearray()
         self.time = []
@@ -452,31 +377,19 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
             self.spi_cs = False
             return_frames = None
             if self.WRITE == self.txbuf[0]:
-                decoder = CmdDecoder(self.trace)
                 debug_print("Decoding command")
-                self.state = MdfuSpiTransactionState.CMD
-                return decoder.decode(self.txbuf, self.rxbuf, self.time)
+                return self.command_decoder.decode(self.txbuf, self.rxbuf, self.time)
             if self.READ == self.txbuf[0]:
-                if self.state in (MdfuSpiTransactionState.CMD,
-                                MdfuSpiTransactionState.RESPONSE_STATUS_POLLING,
-                                MdfuSpiTransactionState.RESPONSE):
-                    decoder = ResponseStatusDecoder(self.trace)
-                    debug_print("Decoding response status")
-                    return_frames = decoder.decode(self.txbuf, self.rxbuf, self.time)
-                    if return_frames is None:
-                        self.state = MdfuSpiTransactionState.RESPONSE_STATUS_POLLING
-                    else:
-                        self.state = MdfuSpiTransactionState.RESPONSE_STATUS
-                else:
-                    self.state = MdfuSpiTransactionState.RESPONSE
-                    decoder = ResponseDecoder(self.trace)
+                if ord("R") == self.rxbuf[0]:
                     debug_print("Decoding response")
-                    return_frames = decoder.decode(self.txbuf, self.rxbuf, self.time)
+                    return_frames = self.response_decoder.decode(self.txbuf, self.rxbuf, self.time)
+                else:
+                    debug_print("Decoding response status")
+                    return_frames = self.response_status_decoder.decode(self.txbuf, self.rxbuf, self.time)
             return return_frames
 
         if frame.type == "enable":
             self.spi_cs = True
-            self.first_byte = True
             self.reset_buffers()
             return None
 
