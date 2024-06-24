@@ -1,0 +1,13 @@
+{
+  "name": "MDFU Serial",
+  "apiVersion": "1.0.0",
+  "author": "Lars Häring",
+  "version": "0.0.1",
+  "description": "MDFU serial transport analyzer",
+  "extensions": {
+    "MDFU SPI": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "mdfu_serial_transport_analyzer.MdfuSerialTransportAnalyzer"
+    }
+  }
+}
