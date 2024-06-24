@@ -5,15 +5,15 @@ from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #p
 from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, verify_checksum
 
 # Enable/disable printing to Saleae terminal in debug_print function
-DEBUG = True
+DEBUG = False
 
-def debug_print(txt):
+def debug_print(*args):
     """Print debug messages to Saleae terminal
-    :param txt: Text to print on terminal
-    :type txt: str
+    :param args: Objects to print on terminal
+    :type args: object
     """
     if DEBUG:
-        print(txt)
+        print(*args)
 
 class DecodingError(Exception):
     """Exception for errors during protocol decoding
