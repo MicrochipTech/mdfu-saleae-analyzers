@@ -1,11 +1,15 @@
 {
-  "name": "MDFU Serial",
+  "name": "MDFU Analyzers",
   "apiVersion": "1.0.0",
   "author": "Lars Häring",
   "version": "0.0.1",
-  "description": "MDFU serial transport analyzer",
+  "description": "Microchip Device Firmware Update (MDFU) Analyzer",
   "extensions": {
     "MDFU SPI": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "mdfu_spi_transport_analyzer.MdfuSpiTransportAnalyzer"
+    },
+    "MDFU Serial": {
       "type": "HighLevelAnalyzer",
       "entryPoint": "mdfu_serial_transport_analyzer.MdfuSerialTransportAnalyzer"
     }

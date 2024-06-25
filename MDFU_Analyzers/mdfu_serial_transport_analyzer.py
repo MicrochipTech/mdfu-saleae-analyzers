@@ -164,6 +164,7 @@ class MdfuSerialFrameDecoder(ABC):
                 return None
             self.clear_buffers()
             self.state = "decoding"
+            self.frame_start = start_time
             self.buf.append(byte)
             return None
 
@@ -199,7 +200,7 @@ class MdfuCmdDecoder(MdfuSerialFrameDecoder):
             mdfu_packet = MdfuCmdPacket.from_binary(mdfu_serial_frame.packet)
         except (ValueError, MdfuCmdNotSupportedError):
             return None
-        return AnalyzerFrame("mdfu_frame", self.frame_start, self.frame_end, mdfu_packet)
+        return AnalyzerFrame("mdfu_frame", self.frame_start, self.frame_end, {'labelText': repr(mdfu_packet)})
 
 class MdfuResponseDecoder(MdfuSerialFrameDecoder):
     """MDFU serial transport response decoder
@@ -215,13 +216,13 @@ class MdfuResponseDecoder(MdfuSerialFrameDecoder):
             mdfu_packet = MdfuStatusPacket.from_binary(mdfu_serial_frame.packet)
         except (ValueError, MdfuStatusInvalidError):
             return None
-        return AnalyzerFrame("mdfu_frame", self.frame_start, self.frame_end, mdfu_packet)
+        return AnalyzerFrame("mdfu_frame", self.frame_start, self.frame_end, {'labelText': repr(mdfu_packet)})
 
 
 class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-public-methods
     """MDFU serial transport analyzer
     """
-    trace_setting = ChoicesSetting(choices=('tx', 'rx'))
+    trace_setting = ChoicesSetting(choices=('from host', 'to host'))
     result_types = {
         'mdfu_frame': {
             'format': '{{data.labelText}}'
@@ -230,7 +231,7 @@ class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-p
 
     def __init__(self):
         """Analyzer intitialization"""
-        self.decoder = MdfuCmdDecoder() if self.trace_setting == "tx" else MdfuResponseDecoder()
+        self.decoder = MdfuCmdDecoder() if self.trace_setting == "from host" else MdfuResponseDecoder()
 
     def decode(self, frame: AnalyzerFrame):
         """Decode analyzer frame
@@ -240,4 +241,6 @@ class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-p
         :return: AnalyzerFrame or list of AnalyzerFrame
         :rtype: AnalyzerFrame or list(AnalyzerFrame)
         """
-        return self.decoder.update(frame.data['data'][0], frame.start_time, frame.end_time)
+        if "data" == frame.type:
+            return self.decoder.update(frame.data['data'][0], frame.start_time, frame.end_time)
+        return None
