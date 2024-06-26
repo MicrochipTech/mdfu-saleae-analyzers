@@ -12,6 +12,10 @@
     "MDFU Serial": {
       "type": "HighLevelAnalyzer",
       "entryPoint": "mdfu_serial_transport_analyzer.MdfuSerialTransportAnalyzer"
+    },
+    "MDFU I2C": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "mdfu_i2c_transport_analyzer.MdfuI2cTransportAnalyzer"
     }
   }
 }
