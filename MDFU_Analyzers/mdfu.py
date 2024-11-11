@@ -1,5 +1,6 @@
 """MDFU protocol"""
 from enum import Enum
+from packaging.version import Version
 
 class EnumDescription(int, Enum):
     """Subclass of Enum to support descriptions for Enum members
@@ -54,6 +55,7 @@ class ClientInfoType(Enum):
     PROTOCOL_VERSION = 1
     BUFFER_INFO = 2
     COMMAND_TIMEOUTS = 3
+    INTER_TRANSACTION_DELAY = 4
 
 class ImageState(Enum):
     """MDFU firmware image states for GetImageState command response"""
@@ -86,11 +88,88 @@ class MdfuCmdNotSupportedError(MdfuProtocolError):
     """
 
 class MdfuClientInfoError(MdfuProtocolError):
-    """MDFU exception if client informatino is invalid
+    """MDFU exception if client information is invalid
     """
 class MdfuStatusInvalidError(MdfuProtocolError):
     """MDFU exception for an invalid MDFU packet status
     """
+
+
+class InterTransactionDelay(object):
+    """
+    Represents a delay between transactions in seconds.
+
+    The delay is stored internally as nanoseconds for precision.
+
+    :ivar value: The delay value in nanoseconds.
+    :vartype value: int
+
+    :cvar MAX_INTER_TRANSACTION_DELAY_SECONDS: The maximum delay allowed in seconds.
+    :cvartype MAX_INTER_TRANSACTION_DELAY_SECONDS: float
+    """
+    MAX_INTER_TRANSACTION_DELAY_SECONDS = 0xffff_ffff * 1e-9
+    def __init__(self, value):
+        """
+        Initialize the InterTransactionDelay object with a delay value in seconds.
+
+        :param value: The delay value in seconds. Must be in the range of 0 to 4.294967295 seconds
+        :type value: float
+        """
+        if value > self.MAX_INTER_TRANSACTION_DELAY_SECONDS:
+            raise ValueError("Inter transaction delay is too long. Valid values are 0 <= delay < 4.295 seconds")
+        if value < 0:
+            raise ValueError("Inter transaction delay must be a positive value")
+        # store as ns value
+        self.value = int(value * 1e9)
+
+    @property
+    def seconds(self):
+        """
+        Get the delay value in seconds.
+
+        :return: The delay value in seconds, rounded to 9 decimal places.
+        :rtype: float
+        """
+        return round(self.value * 1e-9, 9)
+
+    @property
+    def ns(self):
+        """
+        Get the delay value in nanoseconds.
+
+        :return: The delay value in nanoseconds.
+        :rtype: int
+        """
+        return self.value
+
+    @classmethod
+    def from_bytes(cls, data):
+        """
+        Create an InterTransactionDelay object from a 4-byte representation.
+
+        :param data: A 4-byte representation of the delay.
+        :type data: bytes
+        :return: An instance of InterTransactionDelay.
+        :rtype: InterTransactionDelay
+        :raises ValueError: If the provided data is not 4 bytes.
+        """
+        if len(data) != 4:
+            raise ValueError(f"Expected 4 bytes for inter-transaction delay but got {len(data)}")
+        itd_ns = int.from_bytes(data, byteorder="little")
+        # Large/small number calculations can lead to a small rounding error. We correct this
+        # here by rounding up to nano seconds (e.g. 50 * 1e-6 would lead to 4.9999999999999996e-05).
+        # This small error is not relevant so we do the rounding to avoid confusion for the user.
+        itd_seconds = round(itd_ns * 1e-9, 9)
+        return cls(itd_seconds)
+
+    def to_bytes(self):
+        """
+        Convert the InterTransactionDelay object to a 4-byte representation.
+
+        :return: A 4-byte representation of the delay.
+        :rtype: bytes
+        """
+        return self.value.to_bytes(4, byteorder="little")
 
 # pylint: disable-next=too-few-public-methods
 class MdfuPacket():
@@ -284,3 +363,252 @@ def verify_checksum(data, checksum):
     if checksum != calculated_checksum:
         return False
     return True
+
+class ClientInfo():
+    """Class to handle MDFU client information
+    """
+    PARAM_TYPE_SIZE = 1
+    PARAM_LENGTH_SIZE = 1
+    BUFFER_INFO_SIZE = 3
+    PROTOCOL_VERSION_SIZE = 3
+    PROTOCOL_VERSION_INTERNAL_SIZE = 4
+    COMMAND_TIMEOUT_SIZE = 3
+    INTER_TRANSACTION_DELAY_SIZE = 4
+    SECONDS_PER_LSB = 0.1
+    LSBS_PER_SECOND = 10
+
+    def __init__(self, version: Version, buffer_count: int, buffer_size: int,
+                    default_timeout: float, timeouts: dict = None, inter_transaction_delay = None):
+        """Class initialization
+
+        :param version: Client MDFU protocol version 
+        :type version: Version (from packaging.version)
+        :param buffer_count: Number of command buffers on client
+        :type buffer_count: int
+        :param buffer_size: Maximum MDFU packet data length (=command buffer size)
+        :type buffer_size: int
+        :param default_timeout: Default command timeout that must be used when a command
+        does not have a timeout specified in timeouts parameter. The timeout is specified
+        in seconds. Allowed range is 0.1s - 6,553.5s (~109 minutes)).
+        :type default_timeout: float
+        :param timeouts: Client command timeouts.
+        :type timeouts: dict(MdfuCmd: float)
+        :param inter_transaction_delay: Delay in seconds between transactions on MAC layer (e.g. read/write calls)
+        :type inter_transaction_delay: float
+        """
+        self.default_timeout = default_timeout
+        if timeouts:
+            self.timeouts = timeouts
+        else:
+            self.timeouts = {}
+        self._verify_timeouts()
+        self.protocol_version = version
+        self.buffer_size = buffer_size
+        self.buffer_count = buffer_count
+        self.inter_transaction_delay = inter_transaction_delay
+
+    def __str__(self):
+        """Creates human readable representation of client information
+        """
+        if self.inter_transaction_delay is None:
+            itd_txt = ""
+        else:
+            itd_txt = f"- Inter transaction delay: {self.inter_transaction_delay} seconds"
+        txt =  f"""\
+MDFU client information
+--------------------------------
+- MDFU protocol version: {self.protocol_version}
+- Number of command buffers: {self.buffer_count} bytes
+- Maximum packet data length: {self.buffer_size}
+{itd_txt}
+Command timeouts
+- Default timeout: {self.default_timeout} seconds
+"""
+        for cmd, timeout in self.timeouts.items():
+            txt += f"- {cmd.name}: {timeout} seconds\n"
+        return txt
+
+    def _verify_timeouts(self):
+        """Verify command timeouts
+
+        :raises ValueError: When timeout is above maximum supported value.
+        :raises TypeError: When command is not of type MdfuCmd
+        """
+        if (self.default_timeout * self.LSBS_PER_SECOND) > 0xFFFF:
+            raise ValueError(f"Maximum timeout is 6,553.5 seconds but got {self.default_timeout}")
+
+        for cmd, timeout in self.timeouts.items():
+            if not isinstance(cmd, MdfuCmd):
+                raise TypeError(f"Invalid type. Expected MdfuCmd but got {type(cmd)}")
+            if (timeout * self.LSBS_PER_SECOND) > 0xFFFF:
+                raise ValueError(f"Maximum timeout is 6,553.5 seconds but got {timeout}")
+
+    def to_bytes(self):
+        """Encode client info
+
+        :return: Bytes containing encoded client info
+        :rtype: Bytes like object
+        """
+        data = ClientInfoType.BUFFER_INFO.value.to_bytes(self.PARAM_TYPE_SIZE, byteorder="little")
+        data += self.BUFFER_INFO_SIZE.to_bytes(self.PARAM_LENGTH_SIZE, byteorder="little")
+        data += self.buffer_size.to_bytes(2, byteorder="little")
+        data += bytes([self.buffer_count])
+
+        data += bytes([ClientInfoType.PROTOCOL_VERSION.value])
+        data += self.PROTOCOL_VERSION_SIZE.to_bytes(self.PARAM_LENGTH_SIZE, byteorder="little")
+        data += bytes([self.protocol_version.major, self.protocol_version.minor, self.protocol_version.micro])
+
+        data += bytes([ClientInfoType.COMMAND_TIMEOUTS.value])
+        # Total number of timeouts is: default timeout + timeouts specified in timeouts dict
+        timeouts_count = 1 + len(self.timeouts)
+        timeouts_size = timeouts_count * self.COMMAND_TIMEOUT_SIZE
+        data += timeouts_size.to_bytes(self.PARAM_LENGTH_SIZE, "little")
+        # Default timeout
+        data += bytes([0])
+        data += int(self.default_timeout * self.LSBS_PER_SECOND).to_bytes(2, "little")
+        # Other command timeouts
+        for cmd, value in self.timeouts.items():
+            data += bytes([cmd.value])
+            data += int(value * self.LSBS_PER_SECOND).to_bytes(2, byteorder="little")
+
+        if self.inter_transaction_delay is not None:
+            itd = InterTransactionDelay(self.inter_transaction_delay)
+            data += bytes([ClientInfoType.INTER_TRANSACTION_DELAY.value])
+            data += self.INTER_TRANSACTION_DELAY_SIZE.to_bytes(self.PARAM_LENGTH_SIZE, byteorder="little")
+            data += itd.to_bytes()
+        return data
+
+    @classmethod
+    def _decode_buffer_info(cls, length, data):
+        """Decode buffer info parameter
+
+        :param length: Length of the buffer info parameter
+        :type length: int
+        :param data: Buffer info parameter value
+        :type data: Bytes
+        :raises ValueError: If invalid data is detected during decoding
+        :return: Tuple of (number of buffers, buffer size)
+        :rtype: tuple(int, int)
+        """
+        if length != cls.BUFFER_INFO_SIZE:
+            raise ValueError("Invalid parameter length for MDFU client buffer info." + \
+                             f"Expected {cls.BUFFER_INFO_SIZE} but got {length}")
+        buffer_size = int.from_bytes(data[0:2], byteorder="little")
+        buffer_count = data[2]
+        return buffer_count, buffer_size
+
+    @classmethod
+    def _decode_version(cls, length, data):
+        """Decode version parameter
+
+        :param length: Length of the version parameter
+        :type length: int
+        :param data: Version parameter value
+        :type data: Bytes
+        :raises ValueError: If invalid data is detected when decoding
+        :return: MDFU client protocol version
+        :rtype: Version (from packaging.version)
+        """
+        if length == cls.PROTOCOL_VERSION_SIZE:
+            version = Version(f"{data[0]}.{data[1]}.{data[2]}")
+        elif length == cls.PROTOCOL_VERSION_INTERNAL_SIZE:
+            version = Version(f"{data[0]}.{data[1]}.{data[2]}-alpha{data[3]}")
+        else:
+            raise ValueError("Invalid parameter length for MDFU client protocol version" + \
+                             f"Expected {cls.BUFFER_INFO_SIZE} but got {length}")
+        return version
+
+    @classmethod
+    def _decode_command_timeouts(cls, length, data):
+        """Decode command timeouts parameter
+
+        :param length: Length of the command timeout parameter
+        :type length: int
+        :param data: Command timeout parameter value
+        :type data: Bytes like object
+        :raises ValueError: If invalid data is detected
+        :return: Tuple of (default timeout, commands timeouts)
+        :rtype: tuple(int, dict[MdfuCmd, float])
+        """
+        cmd_timeouts = {}
+        default_timeout = None
+        # Test if the parameter length is a multiple of (1 byte MDFU command, 2 bytes timeout value)
+        if length % cls.COMMAND_TIMEOUT_SIZE:
+            raise ValueError("Invalid parameter length for MDFU client command timeouts" + \
+                             f"Expected length to be a multiple of 3 but got {length}")
+        cmd_values = set(item.value for item in MdfuCmd)
+        for _ in range(0, length // cls.COMMAND_TIMEOUT_SIZE):
+            if data[0] == 0: #default timeout
+                default_timeout = float(int.from_bytes(data[1:3], byteorder="little")) * cls.SECONDS_PER_LSB
+            elif data[0] not in cmd_values:
+                raise ValueError(f"Invalid command code {data[0]} in MDFU client command timeouts")
+            else:
+                timeout = float(int.from_bytes(data[1:3], byteorder="little")) * cls.SECONDS_PER_LSB
+                cmd = MdfuCmd(data[0])
+                cmd_timeouts[cmd] = timeout
+            data = data[3:]
+        if not default_timeout:
+            raise ValueError("No required default timeout is present in client info")
+        return default_timeout, cmd_timeouts
+
+    @classmethod
+    def from_bytes(cls, data):
+        """Create ClientInfo object from bytes
+
+        :param data: Bytes object containing encoded client information
+        :type data: Bytes like object
+        :raises ValueError: When an error occurs during client info decoding
+        :return: Client information
+        :rtype: ClientInfo
+        """
+        i = 0
+        cmd_timeouts = {}
+        version = None
+        buffer_count = None
+        buffer_size = None
+        default_timeout = None
+        inter_transaction_delay = None
+        while i < len(data):
+            try:
+                try:
+                    parameter_type = ClientInfoType(data[i])
+                except ValueError as err:
+                    raise MdfuClientInfoError(f"Invalid client info parameter type {data[i]}") from err
+                parameter_length = data[i+1]
+                parameter_value = data[i + 2:i + 2 + parameter_length]
+
+                if parameter_type == ClientInfoType.BUFFER_INFO:
+                    buffer_count, buffer_size = cls._decode_buffer_info(parameter_length, parameter_value)
+
+                elif parameter_type == ClientInfoType.PROTOCOL_VERSION:
+                    version = cls._decode_version(parameter_length, parameter_value)
+
+                elif parameter_type == ClientInfoType.COMMAND_TIMEOUTS:
+                    default_timeout, cmd_timeouts = cls._decode_command_timeouts(parameter_length, parameter_value)
+
+                elif parameter_type == ClientInfoType.INTER_TRANSACTION_DELAY:
+                    inter_transaction_delay = InterTransactionDelay.from_bytes(parameter_value).seconds
+            except IndexError as err:
+                raise MdfuClientInfoError("Not enough data to decode client information") from err
+            except ValueError as err:
+                raise MdfuClientInfoError(f"Error while decoding client information. {err}") from err
+            i += cls.PARAM_TYPE_SIZE + cls.PARAM_LENGTH_SIZE + parameter_length
+        # Test if mandatory parameters are present
+        if version is None:
+            raise MdfuClientInfoError("Mandatory client info parameter version is missing.")
+        if buffer_count is None or buffer_size is None:
+            raise MdfuClientInfoError("Mandatory client info parameter buffer info is missing.")
+        if default_timeout is None:
+            raise MdfuClientInfoError("Mandatory default timeout is missing in client info command timeouts.")
+        return cls(version, buffer_count, buffer_size, default_timeout, cmd_timeouts,
+                   inter_transaction_delay=inter_transaction_delay)
+
+    def set_default_timeouts(self):
+        """Set default timeout for commands that don't have a timeout set
+
+        Update timeouts dictionary by adding a command timeout for commands
+        that are not present in the dictionary.
+        """
+        for cmd in MdfuCmd:
+            if cmd not in self.timeouts:
+                self.timeouts[cmd] = self.default_timeout
