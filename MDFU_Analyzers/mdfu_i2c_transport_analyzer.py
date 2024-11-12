@@ -9,6 +9,7 @@ from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, verify_chec
 DEBUG = True
 
 class FrameType(Enum):
+    """MDFU I2C frame type codes"""
     RESPONSE_LENGTH = ord('L')
     RESPONSE = ord('R')
 
@@ -46,9 +47,9 @@ class ResponseDecoder():
         return_frames = []
         label_text = "Frame Type Response (R)"
         return_frames.append(AnalyzerFrame('mdfu_frame',
-                                                time[self.RSP_FRAME_TYPE_START]["start"],
-                                                time[self.RSP_FRAME_TYPE_START]["end"],
-                                                {'labelText': label_text}))
+                                            time[self.RSP_FRAME_TYPE_START]["start"],
+                                            time[self.RSP_FRAME_TYPE_START]["end"],
+                                            {'labelText': label_text}))
         try:
             mdfu_packet_bin = data[self.RSP_FRAME_RSP_DATA_START:self.RSP_FRAME_RSP_DATA_END + 1]
             mdfu_packet = MdfuStatusPacket.from_binary(mdfu_packet_bin)
@@ -100,45 +101,39 @@ class ResponseLengthDecoder():
         :rtype: list[AnalyzerFrame]
         """
         return_frames = []
-        # If we a valid response type we have a valid response length
+        # If we have a valid response type we have a valid response length
         if self.RSP_FRAME_TYPE_LENGTH == data[0]:
             rsp_length_bin = data[self.RSP_FRAME_RSP_LENGTH_START:self.RSP_FRAME_RSP_LENGTH_END + 1]
             rsp_length = int.from_bytes(rsp_length_bin, byteorder="little")
-            crc_valid = verify_checksum(rsp_length_bin, int.from_bytes(data[self.RSP_FRAME_CRC_START:], byteorder="little"))
+            crc_valid = verify_checksum(rsp_length_bin,
+                                        int.from_bytes(data[self.RSP_FRAME_CRC_START:], byteorder="little"))
 
             label_text = "Frame Type Response Length (L)"
             return_frames.append(AnalyzerFrame('mdfu_frame',
-                                                    time[self.RSP_FRAME_TYPE_START]["start"],
-                                                    time[self.RSP_FRAME_TYPE_START]["end"],
-                                                    {'labelText': label_text}))
+                                                time[self.RSP_FRAME_TYPE_START]["start"],
+                                                time[self.RSP_FRAME_TYPE_START]["end"],
+                                                {'labelText': label_text}))
             if crc_valid:
-                label_text = f"Response Length: ({rsp_length} bytes)"
-                return_frames.append(AnalyzerFrame('mdfu_frame',
-                                                    time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
-                                                    time[self.RSP_FRAME_RSP_LENGTH_END]["end"],
-                                                    {'labelText': label_text}))
-                label_text = "CRC (Valid)"
-                return_frames.append(AnalyzerFrame('mdfu_frame',
-                                        time[self.RSP_FRAME_CRC_START]["start"],
-                                        time[self.RSP_FRAME_CRC_END]["end"],
-                                        {'labelText': label_text}))
+                label_response_length_text = f"Response Length: ({rsp_length} bytes)"
+                label_crc_text = "CRC (Valid)"
             else:
-                label_text = "Respone Length (Invalid due to CRC error)"
-                return_frames.append(AnalyzerFrame('mdfu_frame',
-                                                    time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
-                                                    time[self.RSP_FRAME_RSP_LENGTH_END]["end"],
-                                                    {'labelText': label_text}))
-                label_text = "CRC (Invalid)"
-                return_frames.append(AnalyzerFrame('mdfu_frame',
-                                                    time[self.RSP_FRAME_CRC_START]["start"],
-                                                    time[self.RSP_FRAME_CRC_END]["end"],
-                                                    {'labelText': label_text}))
+                label_response_length_text = "Respone Length (Invalid due to CRC error)"
+                label_crc_text = "CRC (Invalid)"
+
+            return_frames.append(AnalyzerFrame('mdfu_frame',
+                                    time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
+                                    time[self.RSP_FRAME_RSP_LENGTH_END]["end"],
+                                    {'labelText': label_response_length_text}))
+            return_frames.append(AnalyzerFrame('mdfu_frame',
+                                    time[self.RSP_FRAME_CRC_START]["start"],
+                                    time[self.RSP_FRAME_CRC_END]["end"],
+                                    {'labelText': label_text}))
         else:
             label_text = "Response not ready"
             return_frames.append([AnalyzerFrame('mdfu_frame',
                                                 time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
                                                 time[self.RSP_FRAME_CRC_END]["end"],
-                                                {'labelText': label_text})])
+                                                {'labelText': label_crc_text})])
         return return_frames
 
 class CmdDecoder():
@@ -243,6 +238,7 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer):
         self.buf.extend(frame.data["data"])
 
     def create_client_frame(self):
+        """Create a frame for the I2C client address"""
         label_text = f"Client (0x{self.address:02x}) - {self.state}"
         return AnalyzerFrame('mdfu_frame',
                                         self.address_start,
@@ -267,7 +263,9 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer):
                     self.state = "response"
                 elif FrameType.RESPONSE.value == self.buf[0]:
                     frames.append(self.create_client_frame())
-                    frames.extend(self.response_decoder.decode(self.buf, self.time, command=self.command_decoder.command))
+                    frames.extend(self.response_decoder.decode(self.buf,
+                                                               self.time,
+                                                               command=self.command_decoder.command))
                     self.state = "command"
                 else:
                     # If its neither a response or response length frame the client is busy

@@ -116,7 +116,8 @@ class InterTransactionDelay(object):
         :type value: float
         """
         if value > self.MAX_INTER_TRANSACTION_DELAY_SECONDS:
-            raise ValueError("Inter transaction delay is too long. Valid values are 0 <= delay < 4.295 seconds")
+            raise ValueError("Inter transaction delay is too long."
+                             f"Valid values are 0 <= delay < {self.MAX_INTER_TRANSACTION_DELAY_SECONDS} seconds")
         if value < 0:
             raise ValueError("Inter transaction delay must be a positive value")
         # store as ns value
@@ -535,7 +536,7 @@ Command timeouts
         # Test if the parameter length is a multiple of (1 byte MDFU command, 2 bytes timeout value)
         if length % cls.COMMAND_TIMEOUT_SIZE:
             raise ValueError("Invalid parameter length for MDFU client command timeouts" + \
-                             f"Expected length to be a multiple of 3 but got {length}")
+                             f"Expected length to be a multiple of {cls.COMMAND_TIMEOUT_SIZE} but got {length}")
         cmd_values = set(item.value for item in MdfuCmd)
         for _ in range(0, length // cls.COMMAND_TIMEOUT_SIZE):
             if data[0] == 0: #default timeout
