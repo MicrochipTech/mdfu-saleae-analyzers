@@ -2,7 +2,7 @@
   "name": "MDFU Analyzers",
   "apiVersion": "1.0.0",
   "author": "Lars Häring",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Microchip Device Firmware Update (MDFU) Analyzer",
   "extensions": {
     "MDFU SPI": {
