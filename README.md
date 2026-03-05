@@ -81,7 +81,7 @@ The MDFU I2C Transport Analyzer is designed to decode the MDFU protocol over the
 
 To use the MDFU I2C Transport Analyzer, you need a valid capture of the I2C bus traffic, including the SCL (clock) and SDA (data) signals. The analyzer setup involves two steps:
 1. **I2C Analyzer**: First, process the I2C traffic using the `I2C` analyzer provided by Saleae. This step converts the raw I2C signals into a format that can be further analyzed.
-2. **MDFU I2C Analyzer**: Use the output from the `I2C` analyzer as input for the MDFU I2C Analyzer to decode the MDFU protocol.
+2. **MDFU I2C Analyzer**: Use the output from the `I2C` analyzer as input for the MDFU I2C Analyzer to decode either the transport or the MDFU protocol.
 
 ### Analyzer Settings
 
@@ -89,6 +89,10 @@ To use the MDFU I2C Transport Analyzer, you need a valid capture of the I2C bus 
 
 ## Changelog
 
-### [0.2.0] - December 2024
+### [0.2.0] - May 2026
+
+- Option to decode I2C at transport or MDFU protocol layer
+
+### [0.1.0] - December 2024
 
 Initial release of the MDFU Analyzers Extension for Saleae, including support for serial, SPI, and I2C transport layers.
