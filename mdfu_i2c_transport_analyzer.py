@@ -17,7 +17,8 @@ Saleae high level analyzer for MDFU SPI transport
 from enum import Enum
 from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #pylint: disable=import-error
 from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, \
-                verify_checksum, ClientInfo, MdfuCmd, MdfuClientInfoError
+                verify_checksum, ClientInfo, MdfuCmd, MdfuClientInfoError, \
+                MdfuStatus
 
 # Enable/disable printing to Saleae terminal in debug_print function
 DEBUG = True
@@ -39,7 +40,7 @@ class DecodingError(Exception):
     """Exception for errors during protocol decoding
     """
 
-class ResponseDecoder():
+class ResponseDecoder(): #pylint: disable=too-few-public-methods
     """MDFU I2C transport response decoder"""
     RSP_FRAME_TYPE_START = 0
     RSP_FRAME_RSP_DATA_START = 1
@@ -64,17 +65,17 @@ class ResponseDecoder():
 
         # Verify that response length is reasonable
         if len(data) < self.MINIMUM_RESPONSE_FRAME_LENGTH:
-            transport_frames.append(AnalyzerFrame('mdfu_transport',
+            transport_frames.append(AnalyzerFrame('mdfu_error',
                                             time[self.RSP_FRAME_TYPE_START]["start"],
                                             time[-1]["end"],
-                                            {'labelText': 'Error Decoding Response (Invalid Length)'}))
+                                            {'error': 'Error Decoding Response (Invalid Length)'}))
             return transport_frames, None
 
         label_text = "Frame Type Response (R)"
         transport_frames.append(AnalyzerFrame('mdfu_transport',
                                             time[self.RSP_FRAME_TYPE_START]["start"],
                                             time[self.RSP_FRAME_TYPE_START]["end"],
-                                            {'labelText': label_text}))
+                                            {'type': label_text}))
         # Transport payload = MDFU response packet
         mdfu_packet_bin = data[self.RSP_FRAME_RSP_DATA_START:self.RSP_FRAME_RSP_DATA_END + 1]
 
@@ -82,59 +83,63 @@ class ResponseDecoder():
             # Decode MDFU response packet from transport payload
             try:
                 mdfu_packet = MdfuStatusPacket.from_binary(mdfu_packet_bin)
-                label_text = f"{mdfu_packet}"
+                mdfu_frames.append(AnalyzerFrame('mdfu_prot_response',
+                    time[self.RSP_FRAME_RSP_DATA_START]["start"],
+                    time[self.RSP_FRAME_RSP_DATA_END]["end"],
+                    {'sequence_number': str(mdfu_packet.sequence_number),
+                        'resend': mdfu_packet.resend,
+                        'status': MdfuStatus(mdfu_packet.status).name,
+                        'data': mdfu_packet.data}
+                        ))
                 try:
                     if command is not None:
                         if command == MdfuCmd.GET_CLIENT_INFO.value:
                             client_info = ClientInfo.from_bytes(mdfu_packet.data)
-                            debug_print(client_info)
+                            print(client_info)
+
                 except MdfuClientInfoError as exc:
                     debug_print(exc)
             except MdfuProtocolError as exc:
-                debug_print(exc)
-                label_text = f"Error decoding MDFU response: {exc}"
+                mdfu_frames.append(AnalyzerFrame('mdfu_error',
+                    time[self.RSP_FRAME_RSP_DATA_START]["start"],
+                    time[self.RSP_FRAME_RSP_DATA_END]["end"],
+                    {'error': str(exc)}
+                ))
 
             # I2C transport payload frame
             transport_frames.append(AnalyzerFrame('mdfu_transport',
                                     time[self.RSP_FRAME_RSP_DATA_START]["start"],
                                     time[self.RSP_FRAME_RSP_DATA_END]["end"],
-                                    {'labelText': label_text}))
-
-            # MDFU protocol frame
-            mdfu_frames.append(AnalyzerFrame('mdfu_protocol',
-                                    time[self.RSP_FRAME_RSP_DATA_START]["start"],
-                                    time[self.RSP_FRAME_RSP_DATA_END]["end"],
-                                    {'labelText': "MDFU Response - " + label_text}))
+                                    {'type': 'Payload'}))
 
             # I2C transport CRC frame
             label_text = "CRC (Valid)"
             transport_frames.append(AnalyzerFrame('mdfu_transport',
                                                 time[self.RSP_FRAME_CRC_START]["start"],
                                                 time[self.RSP_FRAME_CRC_END]["end"],
-                                                {'labelText': label_text}))
+                                                {'type': label_text}))
         else:
-            label_text = "Invalid payload due to CRC error"
             # I2C transport payload frame
             transport_frames.append(AnalyzerFrame('mdfu_transport',
                                     time[self.RSP_FRAME_RSP_DATA_START]["start"],
                                     time[self.RSP_FRAME_RSP_DATA_END]["end"],
-                                    {'labelText': label_text}))
+                                    {'type': 'Payload'}))
 
             # MDFU protocol frame
-            mdfu_frames.append(AnalyzerFrame('mdfu_protocol',
+            mdfu_frames.append(AnalyzerFrame('mdfu_error',
                                     time[self.RSP_FRAME_RSP_DATA_START]["start"],
                                     time[self.RSP_FRAME_RSP_DATA_END]["end"],
-                                    {'labelText': label_text}))
+                                    {'error': "Transport error (invalid CRC)"}))
             label_text = "CRC (Invalid)"
             # I2C transport CRC frame
-            transport_frames.append(AnalyzerFrame('mdfu_transport',
+            transport_frames.append(AnalyzerFrame('mdfu_error',
                                                 time[self.RSP_FRAME_CRC_START]["start"],
                                                 time[self.RSP_FRAME_CRC_END]["end"],
-                                                {'labelText': label_text}))
+                                                {'error': label_text}))
 
         return transport_frames, mdfu_frames
 
-class ResponseLengthDecoder():
+class ResponseLengthDecoder(): #pylint: disable=too-few-public-methods
     """MDFU I2C transport response length decoder"""
     RSP_FRAME_TYPE_START = 0
     RSP_FRAME_RSP_LENGTH_START = 1
@@ -161,35 +166,40 @@ class ResponseLengthDecoder():
             crc_valid = verify_checksum(rsp_length_bin,
                                         int.from_bytes(data[self.RSP_FRAME_CRC_START:], byteorder="little"))
 
-            label_text = "Frame Type Response Length (L)"
+            label_text = "Response Length (L)"
             return_frames.append(AnalyzerFrame('mdfu_transport',
                                                 time[self.RSP_FRAME_TYPE_START]["start"],
                                                 time[self.RSP_FRAME_TYPE_START]["end"],
-                                                {'labelText': label_text}))
+                                                {'type': label_text}))
             if crc_valid:
                 label_response_length_text = f"Response Length: ({rsp_length} bytes)"
-                label_crc_text = "CRC (Valid)"
+                return_frames.append(AnalyzerFrame('mdfu_transport',
+                        time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
+                        time[self.RSP_FRAME_RSP_LENGTH_END]["end"],
+                        {'type': label_response_length_text}))
+                return_frames.append(AnalyzerFrame('mdfu_transport',
+                        time[self.RSP_FRAME_CRC_START]["start"],
+                        time[self.RSP_FRAME_CRC_END]["end"],
+                        {'type': 'CRC (Valid)'}))
             else:
                 label_response_length_text = "Response Length (Invalid due to CRC error)"
-                label_crc_text = "CRC (Invalid)"
-
-            return_frames.append(AnalyzerFrame('mdfu_transport',
-                                    time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
-                                    time[self.RSP_FRAME_RSP_LENGTH_END]["end"],
-                                    {'labelText': label_response_length_text}))
-            return_frames.append(AnalyzerFrame('mdfu_transport',
-                                    time[self.RSP_FRAME_CRC_START]["start"],
-                                    time[self.RSP_FRAME_CRC_END]["end"],
-                                    {'labelText': label_crc_text}))
+                return_frames.append(AnalyzerFrame('mdfu_transport',
+                        time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
+                        time[self.RSP_FRAME_RSP_LENGTH_END]["end"],
+                        {'type': label_response_length_text}))
+                return_frames.append(AnalyzerFrame('mdfu_error',
+                        time[self.RSP_FRAME_CRC_START]["start"],
+                        time[self.RSP_FRAME_CRC_END]["end"],
+                        {'type': 'CRC (Invalid)'}))
         else:
             label_text = "Response not ready"
             return_frames.append(AnalyzerFrame('mdfu_transport',
                                                 time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
                                                 time[self.RSP_FRAME_CRC_END]["end"],
-                                                {'labelText': label_text}))
+                                                {'type': label_text}))
         return return_frames
 
-class CmdDecoder():
+class CmdDecoder(): #pylint: disable=too-few-public-methods
     """MDFU I2C transport command decoder
     """
     FRAME_CRC_START = -2
@@ -221,60 +231,95 @@ class CmdDecoder():
                 mdfu_packet = MdfuCmdPacket.from_binary(mdfu_packet_bin)
                 self.command = mdfu_packet.command
                 label_text = f"{mdfu_packet}"
+                # MDFU protocol layer frame
+                mdfu_frames.append(AnalyzerFrame('mdfu_prot_command',
+                                    time[0]["start"],
+                                    time[-3]["end"],
+                                    {
+                                        'command': MdfuCmd(mdfu_packet.command).name,
+                                        'sequence_number': str(mdfu_packet.sequence_number),
+                                        'sync': mdfu_packet.sync,
+                                        'data': mdfu_packet.data
+                                    }
+                                    ))
+
             except (MdfuProtocolError, ValueError) as exc:
                 self.command = None
-                debug_print(exc)
-                label_text = f"Invalid MDFU packet ({data_size} bytes)"
-
+                # MDFU protocol layer frame
+                mdfu_frames.append(AnalyzerFrame('mdfu_error',
+                                        time[0]["start"],
+                                        time[-3]["end"],
+                                        {'error': "MDFU Packet Decoding Error: - " + str(exc)}))
             # I2C transport payload frame
             transport_frames.append(AnalyzerFrame('mdfu_transport',
                                             time[0]["start"],
                                             time[-3]["end"],
-                                            {'labelText': label_text}))
-            # MDFU protocol layer frame
-            mdfu_frames.append(AnalyzerFrame('mdfu_protocol',
-                                    time[0]["start"],
-                                    time[-3]["end"],
-                                    {'labelText': "MDFU Command - " + label_text}))
-
+                                            {
+                                                'type': "PAYLOAD",
+                                                'data': mdfu_packet_bin
+                                                }
+                                            ))
             # I2C transport CRC frame
             label_text = "CRC (Valid)"
             transport_frames.append(AnalyzerFrame('mdfu_transport',
                                     time[self.FRAME_CRC_START]["start"],
                                     time[self.FRAME_CRC_END]["end"],
-                                    {'labelText': label_text}))
+                                    {'type': label_text}))
         else:
             # I2C transport invalid payload frame
             label_text = "Invalid MDFU packet due to CRC error on transport"
-            transport_frames.append(AnalyzerFrame('mdfu_transport',
+            transport_frames.append(AnalyzerFrame('mdfu_error',
                                 time[0]["start"],
                                 time[-3]["end"],
-                                {'labelText': label_text}))
+                                {'error': label_text}))
             # MDFU protocol layer invalid frame
-            mdfu_frames.append(AnalyzerFrame('mdfu_protocol',
+            mdfu_frames.append(AnalyzerFrame('mdfu_error',
                                 time[0]["start"],
                                 time[-1]["end"],
-                                {'labelText': label_text}))
+                                {'error': label_text}))
             # I2C transport invalid CRC frame
             label_text = "CRC (Invalid)"
             transport_frames.append(AnalyzerFrame('mdfu_transport',
                                             time[self.FRAME_CRC_START]["start"],
                                             time[self.FRAME_CRC_END]["end"],
-                                            {'labelText': label_text}))
+                                            {'type': label_text}))
 
         return transport_frames, mdfu_frames
 
-class MdfuI2cTransportAnalyzer(HighLevelAnalyzer):
+class MdfuI2cTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-many-instance-attributes
     """High level analyzer"""
     debug_setting = ChoicesSetting(choices=('Off', 'On'))
     protocol_layer_setting = ChoicesSetting(choices=('MDFU Layer', 'I2C Transport Layer'))
+    # Result types are split into three categories
+    # 1) MDFU protocol (commands and responses)
+    # 2) MDFU transport (all transport related types)
+    # 3) MDFU error (both, transport and protocol errors)
     result_types = {
-        'mdfu_protocol': {
-            'format': '{{data.labelText}}'
+        'mdfu_prot_response': {
+            'format': (
+                'Sequence Number: {{data.sequence_number}}, '
+                'Resend: {{data.resend}}, '
+                'Status: {{data.status}}, '
+                'Data: {{data.data}}'
+            )
         },
+
+        'mdfu_prot_command': {
+            'format': (
+                'Command: {{data.command}}, '
+                'Sequence Number {{data.sequence_number}}, '
+                'Sync: {{data.sync}}, '
+                'Data: {{data.data}}'
+            )
+        },
+
+        'mdfu_error': {
+            'format': 'ERROR: {{error}}'
+        },
+
         'mdfu_transport': {
-            'format': '{{data.labelText}}'
-        },
+            'format': '{{data.type}}'
+        }
     }
 
     def __init__(self):
@@ -318,7 +363,7 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer):
         return AnalyzerFrame('mdfu_transport',
                                         self.address_start,
                                         self.address_end,
-                                        {'labelText': label_text})
+                                        {'type': label_text})
 
     def decode(self, frame: AnalyzerFrame):
         """Decode I2C traffic"""
@@ -332,7 +377,7 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer):
                 return AnalyzerFrame('mdfu_transport',
                                         self.address_start,
                                         self.address_end,
-                                        {'labelText': "Client busy"})
+                                        {'type': "Client busy"})
             # Check if its an I2C read or a write operation
             if self.read:
                 if FrameType.RESPONSE_LENGTH.value == self.buf[0]:
@@ -354,7 +399,7 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer):
                     transport_frames.append(AnalyzerFrame('mdfu_transport',
                                                 self.time[0]["start"],
                                                 self.time[-1]["end"],
-                                                {'labelText': label_text}))
+                                                {'type': label_text}))
             else:
                 transport_frames.append(self.create_client_frame())
                 transport, mdfu = self.command_decoder.decode(self.buf, self.time)

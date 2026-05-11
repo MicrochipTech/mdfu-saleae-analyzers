@@ -16,7 +16,7 @@ Saleae high level analyzer for MDFU serial transport
 """
 from abc import ABC, abstractmethod
 from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #pylint: disable=import-error
-from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuStatusInvalidError, MdfuCmdNotSupportedError
+from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuStatusInvalidError, MdfuCmdNotSupportedError, MdfuCmd, MdfuStatus
 
 FRAME_START_CODE = 0x56
 FRAME_END_CODE = 0x9E
@@ -211,9 +211,16 @@ class MdfuCmdDecoder(MdfuSerialFrameDecoder):
         try:
             mdfu_serial_frame = Frame.from_bytes(self.buf)
             mdfu_packet = MdfuCmdPacket.from_binary(mdfu_serial_frame.packet)
-        except (ValueError, MdfuCmdNotSupportedError):
-            return None
-        return AnalyzerFrame("mdfu_frame", self.frame_start, self.frame_end, {'labelText': repr(mdfu_packet)})
+            return AnalyzerFrame('mdfu_prot_command',
+                self.frame_start,
+                self.frame_end,
+                {'command': MdfuCmd(mdfu_packet.command).name,
+                'sequence_number': str(mdfu_packet.sequence_number),
+                'sync': mdfu_packet.sync,
+                'data': mdfu_packet.data}
+            )
+        except (ValueError, MdfuCmdNotSupportedError) as exc:
+            return AnalyzerFrame("mdfu_error", self.frame_start, self.frame_end, {'error': str(exc)})
 
 class MdfuResponseDecoder(MdfuSerialFrameDecoder):
     """MDFU serial transport response decoder
@@ -227,9 +234,18 @@ class MdfuResponseDecoder(MdfuSerialFrameDecoder):
         try:
             mdfu_serial_frame = Frame.from_bytes(self.buf)
             mdfu_packet = MdfuStatusPacket.from_binary(mdfu_serial_frame.packet)
-        except (ValueError, MdfuStatusInvalidError):
-            return None
-        return AnalyzerFrame("mdfu_frame", self.frame_start, self.frame_end, {'labelText': repr(mdfu_packet)})
+            return AnalyzerFrame('mdfu_prot_response',
+                    self.frame_start,
+                    self.frame_end,
+                    {
+                        'sequence_number': str(mdfu_packet.sequence_number),
+                        'resend': mdfu_packet.resend,
+                        'status': MdfuStatus(mdfu_packet.status).name,
+                        'data': mdfu_packet.data
+                    }
+            )
+        except (ValueError, MdfuStatusInvalidError) as exc:
+            return AnalyzerFrame("mdfu_error", self.frame_start, self.frame_end, {'error': str(exc)})
 
 
 class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-public-methods
@@ -237,8 +253,30 @@ class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-p
     """
     trace_setting = ChoicesSetting(choices=('from host', 'to host'))
     result_types = {
-        'mdfu_frame': {
-            'format': '{{data.labelText}}'
+        'mdfu_prot_response': {
+            'format': (
+                'Sequence Number: {{data.sequence_number}}, '
+                'Resend: {{data.resend}}, '
+                'Status: {{data.status}}, '
+                'Data: {{data.data}}'
+            )
+        },
+
+        'mdfu_prot_command': {
+            'format': (
+                'Command: {{data.command}}, '
+                'Sequence Number {{data.sequence_number}}, '
+                'Sync: {{data.sync}}, '
+                'Data: {{data.data}}'
+            )
+        },
+
+        'mdfu_error': {
+            'format': 'ERROR: {{error}}'
+        },
+
+        'mdfu_transport': {
+            'format': '{{data.type}}'
         }
     }
 
