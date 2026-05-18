@@ -15,7 +15,8 @@
 Saleae high level analyzer for MDFU SPI transport
 """
 from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #pylint: disable=import-error
-from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, verify_checksum, MdfuCmd, MdfuStatus
+from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, verify_checksum, MdfuCmd, MdfuStatus,\
+    ClientInfo, MdfuClientInfoError
 
 # Enable/disable printing to Saleae terminal in debug_print function
 DEBUG = False
@@ -67,10 +68,18 @@ class Decoder():
         return []
 
     def decode_tx(self, tx, time):
-        """Placeholder for decoder implementation override function"""
+        """Override in subclass to decode MOSI transaction data.
+
+        :raises NotImplementedError: Always — subclasses must implement this method.
+        """
+        raise NotImplementedError("Subclasses must implement decode_tx")
 
     def decode_rx(self, rx, time):
-        """Placeholder for decoder implementation override function"""
+        """Override in subclass to decode MISO transaction data.
+
+        :raises NotImplementedError: Always — subclasses must implement this method.
+        """
+        raise NotImplementedError("Subclasses must implement decode_rx")
 
 class ResponseDecoder(Decoder):
     """MDFU SPI transport response decoder"""
@@ -127,14 +136,16 @@ class ResponseDecoder(Decoder):
         :rtype: list[AnalyzerFrame]
         """
         return_frames = []
-        if rx[self.RSP_FRAME_PREFIX_START: self.RSP_FRAME_PREFIX_END + 1] != self.RSP_FRAME_PREFIX:
+        response_frame_prefix = rx[self.RSP_FRAME_PREFIX_START: self.RSP_FRAME_PREFIX_END + 1]
+        if response_frame_prefix != self.RSP_FRAME_PREFIX:
             label_text = "DUMMY BYTE"
             return_frames.append(AnalyzerFrame('mdfu_transport',
                                                time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
                                                time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
                                                {'type': label_text}))
-            label_text = "No response from client"
-            return_frames.append(AnalyzerFrame('mdfu_transport',
+            label_text = f"Transport error: Invalid response frame prefix {response_frame_prefix}" +\
+                        f" expected {self.RSP_FRAME_PREFIX}"
+            return_frames.append(AnalyzerFrame('mdfu_error',
                                                time[self.RSP_FRAME_PREFIX_START]["start"],
                                                time[self.RSP_FRAME_CRC_END]["end"],
                                                {'type': label_text}))
@@ -150,10 +161,13 @@ class ResponseDecoder(Decoder):
                                                time[self.RSP_FRAME_PREFIX_END]["end"],
                                                {'type': label_text}))
 
+            mdfu_packet_bin = rx[self.RSP_FRAME_RSP_DATA_START:self.RSP_FRAME_RSP_DATA_END + 1]
             try:
-                mdfu_packet_bin = rx[self.RSP_FRAME_RSP_DATA_START:self.RSP_FRAME_RSP_DATA_END + 1]
                 mdfu_packet = MdfuStatusPacket.from_binary(mdfu_packet_bin)
-                label_text = f"{mdfu_packet}"
+                # Client info command has always sequence number 0
+                if mdfu_packet.sequence_number == 0:
+                    client_info = ClientInfo.from_bytes(mdfu_packet.data)
+                    print(client_info)
                 return_frames.append(AnalyzerFrame('mdfu_prot_response',
                                     time[self.RSP_FRAME_RSP_DATA_START]["start"],
                                     time[self.RSP_FRAME_RSP_DATA_END]["end"],
@@ -162,7 +176,6 @@ class ResponseDecoder(Decoder):
                                      'status': MdfuStatus(mdfu_packet.status).name,
                                      'data': mdfu_packet.data}))
             except MdfuProtocolError as exc:
-                debug_print(exc)
                 label_text = f"Protocol error: {exc}"
                 return_frames.append(AnalyzerFrame('mdfu_error',
                                                 time[self.RSP_FRAME_RSP_DATA_START]["start"],
@@ -351,19 +364,18 @@ class CmdDecoder(Decoder):
             return_frames.append(AnalyzerFrame('mdfu_prot_command',
                                     time[self.FRAME_PAYLOAD_START]["start"],
                                     time[self.FRAME_PAYLOAD_END]["end"],
-                                    {'command': MdfuCmd(mdfu_packet.command).name,
-                                     'sequence_number': str(mdfu_packet.sequence_number),
-                                     'sync': mdfu_packet.sync,
-                                     'data': mdfu_packet.data}))
+                                    {
+                                        'command': MdfuCmd(mdfu_packet.command).name,
+                                        'sequence_number': str(mdfu_packet.sequence_number),
+                                        'sync': mdfu_packet.sync,
+                                        'data': mdfu_packet.data
+                                    }))
         except MdfuProtocolError as exc:
-            debug_print(exc)
-            label_text = f"Invalid MDFU packet ({data_size} bytes)"
+            msg = f"Protocol error: {exc}"
             return_frames.append(AnalyzerFrame('mdfu_error',
                         time[self.FRAME_PAYLOAD_START]["start"],
                         time[self.FRAME_PAYLOAD_END]["end"],
-                        {'error': label_text}))
-
-
+                        {'error': msg}))
 
         if verify_checksum(mdfu_packet_bin, int.from_bytes(tx[self.FRAME_CRC_START:], byteorder="little")):
             label_text = "CRC (Valid)"
@@ -373,6 +385,79 @@ class CmdDecoder(Decoder):
                                            time[self.FRAME_CRC_START]["start"],
                                            time[self.FRAME_CRC_END]["end"],
                                            {'type': label_text}))
+        return return_frames
+
+class InvalidFrameDecoder(Decoder):
+    """MDFU SPI transport response status decoder"""
+    FRAME_PREFIX_START = 0
+    FRAME_DUMMY_BYTES_START = 1
+    FRAME_DUMMY_BYTES_END = 7
+
+    RSP_FRAME_DUMMY_BYTE_START = 0
+    RSP_FRAME_PREFIX_START = 1
+    RSP_FRAME_PREFIX_END = 3
+    RSP_FRAME_RSP_LENGTH_START = 4
+    RSP_FRAME_RSP_LENGTH_END = 5
+    RSP_FRAME_CRC_START = 6
+    RSP_FRAME_CRC_END = 7
+
+    FRAME_SIZE = 8
+    RSP_FRAME_PREFIX = bytes("LEN", encoding="ascii")
+
+    def decode_tx(self, tx, time):
+        """Decode MOSI transaction data
+
+        :param tx: Buffer containing MOSI bytes
+        :type tx: bytes, bytearray
+        :param time: Timestamps for MOSI bytes
+        :type time: list[dict(str:datetime)]
+        :raises DecodingError: When encountering a decoding error
+        :return: List of Saleae analyzer frames containing decoded data
+        :rtype: list[AnalyzerFrame]
+        """
+        return_frames = []
+        label_text = "READ"
+        return_frames.append(AnalyzerFrame('mdfu_transport',
+            time[self.FRAME_PREFIX_START]["start"],
+            time[self.FRAME_PREFIX_START]["end"],
+            {'type': label_text}))
+
+        label_text = "DUMMY BYTES"
+        return_frames.append(AnalyzerFrame('mdfu_transport',
+                                           time[self.FRAME_DUMMY_BYTES_START]["start"],
+                                           time[-1]["end"],
+                                           {'type': label_text}))
+        return return_frames
+
+    def decode_rx(self, rx, time):
+        """Decode MISO transaction data
+
+        :param tx: Buffer containing MISO bytes
+        :type tx: bytes, bytearray
+        :param time: Timestamps for MISO bytes
+        :type time: list[dict(str:datetime)]
+        :raises DecodingError: When encountering a decoding error
+        :return: List of Saleae analyzer frames containing decoded data
+        :rtype: list[AnalyzerFrame]
+        """
+        return_frames = []
+        if rx[self.RSP_FRAME_PREFIX_START: self.RSP_FRAME_PREFIX_END + 1] != self.RSP_FRAME_PREFIX:
+            label_text = "DUMMY BYTE"
+            return_frames.append(AnalyzerFrame('mdfu_transport',
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["start"],
+                                               time[self.RSP_FRAME_DUMMY_BYTE_START]["end"],
+                                               {'type': label_text}))
+            label_text = "PREFIX (invalid)"
+            return_frames.append(AnalyzerFrame('mdfu_transport_error',
+                                               time[self.RSP_FRAME_PREFIX_START]["start"],
+                                               time[self.RSP_FRAME_PREFIX_END]["end"],
+                                               {'type': 'PREFIX', 'error': label_text}))
+            label_text = "DATA (invalid)"
+            return_frames.append(AnalyzerFrame('mdfu_transport_error',
+                                               time[self.RSP_FRAME_RSP_LENGTH_START]["start"],
+                                               time[-1]["end"],
+                                               {'type': 'DATA', 'error': label_text}))
+
         return return_frames
 
 # High level analyzers must subclass the HighLevelAnalyzer class.
@@ -386,6 +471,7 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
     result_types = {
         'mdfu_prot_response': {
             'format': (
+                'MDFU Response - '
                 'Sequence Number: {{data.sequence_number}}, '
                 'Resend: {{data.resend}}, '
                 'Status: {{data.status}}, '
@@ -395,6 +481,7 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
 
         'mdfu_prot_command': {
             'format': (
+                'MDFU Command - '
                 'Command: {{data.command}}, '
                 'Sequence Number {{data.sequence_number}}, '
                 'Sync: {{data.sync}}, '
@@ -403,7 +490,11 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
         },
 
         'mdfu_error': {
-            'format': 'ERROR: {{error}}'
+            'format': '{{data.error}}'
+        },
+
+        'mdfu_transport_error': {
+            'format': '{{data.error}}'
         },
 
         'mdfu_transport': {
@@ -419,9 +510,11 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
         self.response_decoder = ResponseDecoder(trace=self.trace_setting)
         self.response_status_decoder = ResponseStatusDecoder(trace=self.trace_setting)
         self.command_decoder = CmdDecoder(trace=self.trace_setting)
+        self.invalid_frame_decoder = InvalidFrameDecoder(trace=self.trace_setting)
         self.txbuf = bytearray()
         self.rxbuf = bytearray()
         self.time = []
+        self.state = "cmd"
 
     def reset_buffers(self):
         """Reset buffers
@@ -453,14 +546,27 @@ class MdfuSpiTransportAnalyzer(HighLevelAnalyzer):
             try:
                 if self.WRITE == self.txbuf[0]:
                     debug_print("Decoding command")
+                    self.state = "len"
                     return self.command_decoder.decode(self.txbuf, self.rxbuf, self.time)
-                if self.READ == self.txbuf[0]:
-                    if ord("R") == self.rxbuf[1]:
+
+                elif self.READ == self.txbuf[0]:
+                    prefix = self.rxbuf[1:4]
+                    if ResponseDecoder.RSP_FRAME_PREFIX == prefix:
                         debug_print("Decoding response")
+                        self.state = "cmd"
                         return_frames = self.response_decoder.decode(self.txbuf, self.rxbuf, self.time)
-                    else:
+                    elif ResponseStatusDecoder.RSP_FRAME_PREFIX == prefix:
                         debug_print("Decoding response status")
+                        self.state ="rsp"
                         return_frames = self.response_status_decoder.decode(self.txbuf, self.rxbuf, self.time)
+                    else:
+                        # Unless we are in the poll for the response length
+                        # we must consider this case as an error
+                        if self.state != "len":
+                            return_frames = self.invalid_frame_decoder.decode(self.txbuf, self.rxbuf, self.time)
+                        else:
+                            return_frames = self.response_status_decoder.decode(self.txbuf, self.rxbuf, self.time)
+
             except DecodingError as exc:
                 # Let's skip this frame, print the error and try the next one
                 print(f"Error decoding frame: {exc}")
