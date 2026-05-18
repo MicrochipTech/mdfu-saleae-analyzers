@@ -65,7 +65,7 @@ The MDFU Serial Transport Analyzer is designed to decode UART traffic between an
 The MDFU SPI Transport Analyzer decodes traffic on the SPI bus, providing a detailed view of the MDFU protocol over SPI. This analyzer requires a valid capture of the SPI bus traffic, including the CLK, MISO, MOSI, and CS signals.
 
 The analyzer setup involves two steps:
-1. **SPI Analyzer**: First, process the UART traffic using the `SPI` analyzer provided by Saleae. This step converts the raw SPI signals into a format that can be further analyzed.
+1. **SPI Analyzer**: First, process the SPI traffic using the `SPI` analyzer provided by Saleae. This step converts the raw SPI signals into a format that can be further analyzed.
 2. **MDFU SPI Analyzer**: Use the output from the `SPI` analyzer as input for the MDFU SPI Analyzer to decode the MDFU protocol.
 
 ### Analyzer Settings
@@ -85,9 +85,16 @@ To use the MDFU I2C Transport Analyzer, you need a valid capture of the I2C bus 
 
 ### Analyzer Settings
 
+- **Protocol Layer**: Defines which MDFU layer should be decodeed, either `MDFU Transport Layer` or `MDFU Protocol Layer`.
 - **Debug**: This setting specifies whether the analyzer prints additional debug information in the terminal.
 
 ## Changelog
+
+### [0.3.0] - May 2026
+
+- New frame types for MDFU transport, MDFU protocol and errors. This makes it easier to find or filter relevant data.
+- Log decoded client information on console.
+- Update of MDFU protocol layer with latest specification changes.
 
 ### [0.2.0] - May 2026
 
