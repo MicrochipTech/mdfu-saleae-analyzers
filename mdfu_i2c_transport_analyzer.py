@@ -20,21 +20,10 @@ from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuProtocolError, \
                 verify_checksum, ClientInfo, MdfuCmd, MdfuClientInfoError, \
                 MdfuStatus
 
-# Enable/disable printing to Saleae terminal in debug_print function
-DEBUG = True
-
 class FrameType(Enum):
     """MDFU I2C frame type codes"""
     RESPONSE_LENGTH = ord('L')
     RESPONSE = ord('R')
-
-def debug_print(*args):
-    """Print debug messages to Saleae terminal
-    :param args: Objects to print on terminal
-    :type args: object
-    """
-    if DEBUG:
-        print(*args)
 
 class DecodingError(Exception):
     """Exception for errors during protocol decoding
@@ -50,13 +39,17 @@ class ResponseDecoder(): #pylint: disable=too-few-public-methods
     # 1 byte frame type, 2 bytes CRC, at least 2 bytes of payload
     MINIMUM_RESPONSE_FRAME_LENGTH = 5
 
-    def decode(self, data, time, command=None):
+    def decode(self, data, time, command=None, debug=False):
         """Decode MDFU I2C transport response
 
         :param data: I2C read transaction data
         :type data: bytearray
         :param time: Timestamps for I2C data bytes
         :type time: list[dict(str:datetime)]
+        :param command: Last command sent, used to decode response data, defaults to None
+        :type command: int, optional
+        :param debug: Enable debug output to Saleae terminal, defaults to False
+        :type debug: bool, optional
         :return: Tuple of Saleae analyzer frames for transport and MDFU layers (Transport Frames, MDFU Frames)
         :rtype: tuple(list[AnalyzerFrame], list[AnalyzerFrame])
         """
@@ -98,7 +91,8 @@ class ResponseDecoder(): #pylint: disable=too-few-public-methods
                             print(client_info)
 
                 except MdfuClientInfoError as exc:
-                    debug_print(exc)
+                    if debug:
+                        print(exc)
             except MdfuProtocolError as exc:
                 mdfu_frames.append(AnalyzerFrame('mdfu_error',
                     time[self.RSP_FRAME_RSP_DATA_START]["start"],
@@ -289,7 +283,7 @@ class CmdDecoder(): #pylint: disable=too-few-public-methods
 class MdfuI2cTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-many-instance-attributes
     """High level analyzer"""
     debug_setting = ChoicesSetting(choices=('Off', 'On'))
-    protocol_layer_setting = ChoicesSetting(choices=('MDFU Layer', 'I2C Transport Layer'))
+    protocol_layer_setting = ChoicesSetting(choices=('MDFU Protocol Layer', 'MDFU Transport Layer'))
     # Result types are split into three categories
     # 1) MDFU protocol (commands and responses)
     # 2) MDFU transport (all transport related types)
@@ -297,6 +291,7 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-many-ins
     result_types = {
         'mdfu_prot_response': {
             'format': (
+                'MDFU Response - '
                 'Sequence Number: {{data.sequence_number}}, '
                 'Resend: {{data.resend}}, '
                 'Status: {{data.status}}, '
@@ -306,7 +301,7 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-many-ins
 
         'mdfu_prot_command': {
             'format': (
-                'Command: {{data.command}}, '
+                'MDFU Command - Command: {{data.command}}, '
                 'Sequence Number {{data.sequence_number}}, '
                 'Sync: {{data.sync}}, '
                 'Data: {{data.data}}'
@@ -335,9 +330,8 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-many-ins
         self.address_end = None
         self.address = None
         self.state = "command"
-        global DEBUG
-        DEBUG = bool(self.debug_setting == "On")
-        self.protocol_layer = "mdfu" if (self.protocol_layer_setting == 'MDFU Layer') else "transport"
+        self.debug = bool(self.debug_setting == "On")
+        self.protocol_layer = "mdfu" if (self.protocol_layer_setting == 'MDFU Protocol Layer') else "transport"
 
     def reset_buffers(self):
         """Reset buffers
@@ -389,9 +383,11 @@ class MdfuI2cTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-many-ins
                     transport_frames.append(self.create_client_frame())
                     transport, mdfu = self.response_decoder.decode(self.buf,
                                                 self.time,
-                                                command=self.command_decoder.command)
+                                                command=self.command_decoder.command,
+                                                debug=self.debug)
                     transport_frames.extend(transport)
-                    mdfu_frames.extend(mdfu)
+                    if mdfu is not None:
+                        mdfu_frames.extend(mdfu)
                     self.state = "Command"
                 else:
                     # If its neither a response or response length frame the client is busy

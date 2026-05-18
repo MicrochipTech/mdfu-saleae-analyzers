@@ -16,7 +16,8 @@ Saleae high level analyzer for MDFU serial transport
 """
 from abc import ABC, abstractmethod
 from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, ChoicesSetting #pylint: disable=import-error
-from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuStatusInvalidError, MdfuCmdNotSupportedError, MdfuCmd, MdfuStatus
+from mdfu import MdfuCmdPacket, MdfuStatusPacket, MdfuStatusInvalidError, MdfuCmdNotSupportedError,\
+    MdfuCmd, MdfuStatus, ClientInfo, MdfuClientInfoError
 
 FRAME_START_CODE = 0x56
 FRAME_END_CODE = 0x9E
@@ -208,10 +209,11 @@ class MdfuCmdDecoder(MdfuSerialFrameDecoder):
         :return: Saleae Analyzer frame or None
         :rtype: None or AnalyzerFrame
         """
+        frame = None
         try:
             mdfu_serial_frame = Frame.from_bytes(self.buf)
             mdfu_packet = MdfuCmdPacket.from_binary(mdfu_serial_frame.packet)
-            return AnalyzerFrame('mdfu_prot_command',
+            frame = AnalyzerFrame('mdfu_prot_command',
                 self.frame_start,
                 self.frame_end,
                 {'command': MdfuCmd(mdfu_packet.command).name,
@@ -220,7 +222,14 @@ class MdfuCmdDecoder(MdfuSerialFrameDecoder):
                 'data': mdfu_packet.data}
             )
         except (ValueError, MdfuCmdNotSupportedError) as exc:
-            return AnalyzerFrame("mdfu_error", self.frame_start, self.frame_end, {'error': str(exc)})
+            frame = AnalyzerFrame("mdfu_error", self.frame_start, self.frame_end, {'error': str(exc)})
+        except MdfuClientInfoError as exc:
+            frame = AnalyzerFrame('mdfu_error',
+                        self.frame_start,
+                        self.frame_end,
+                        {'error': f'Error decoding client info: {exc}'}
+                    )
+        return frame
 
 class MdfuResponseDecoder(MdfuSerialFrameDecoder):
     """MDFU serial transport response decoder
@@ -234,6 +243,10 @@ class MdfuResponseDecoder(MdfuSerialFrameDecoder):
         try:
             mdfu_serial_frame = Frame.from_bytes(self.buf)
             mdfu_packet = MdfuStatusPacket.from_binary(mdfu_serial_frame.packet)
+            # Client info command has always sequence number 0
+            if mdfu_packet.sequence_number == 0:
+                client_info = ClientInfo.from_bytes(mdfu_packet.data)
+                print(client_info)
             return AnalyzerFrame('mdfu_prot_response',
                     self.frame_start,
                     self.frame_end,
@@ -244,7 +257,7 @@ class MdfuResponseDecoder(MdfuSerialFrameDecoder):
                         'data': mdfu_packet.data
                     }
             )
-        except (ValueError, MdfuStatusInvalidError) as exc:
+        except (ValueError, MdfuStatusInvalidError, MdfuClientInfoError) as exc:
             return AnalyzerFrame("mdfu_error", self.frame_start, self.frame_end, {'error': str(exc)})
 
 
@@ -255,6 +268,7 @@ class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-p
     result_types = {
         'mdfu_prot_response': {
             'format': (
+                'MDFU Response - '
                 'Sequence Number: {{data.sequence_number}}, '
                 'Resend: {{data.resend}}, '
                 'Status: {{data.status}}, '
@@ -264,6 +278,7 @@ class MdfuSerialTransportAnalyzer(HighLevelAnalyzer): #pylint: disable=too-few-p
 
         'mdfu_prot_command': {
             'format': (
+                'MDFU Command - '
                 'Command: {{data.command}}, '
                 'Sequence Number {{data.sequence_number}}, '
                 'Sync: {{data.sync}}, '
