@@ -49,9 +49,9 @@ class MdfuStatus(Enum):
     """MDFU status codes
     """
     SUCCESS = 1
-    NOT_SUPPORTED = 2
+    COMMAND_NOT_SUPPORTED = 2
     NOT_AUTHORIZED = 3
-    PACKET_TRANSPORT_FAILURE = 4
+    COMMAND_NOT_EXECUTED = 4
     ABORT_FILE_TRANSFER = 5
 
 class MdfuCmd(Enum):
@@ -87,10 +87,13 @@ class FileTransferAbortCause(EnumDescription):
     APPLICATION_VERSION_ERROR = (7, "Client did not allow changing to the application version " \
     "in the update file")
 
-class TransportFailureCause(EnumDescription):
-    """Transport error causes"""
-    INVALID_CHECKSUM = (0, "Invalid checksum detected")
-    PACKET_TOO_LARGE = (1, "Packet was too large")
+class CmdNotExecutedCause(EnumDescription):
+    """Command not executed error causes"""
+    TRANSPORT_INTEGRITY_CHECK_ERROR = (0, "Command received failed the Transport Integrity Check "\
+    "indicating that the command was corrupted during transportation from the host to the client")
+    COMMAND_TOO_LONG = (1, "Received command exceeded the size of the client buffer")
+    COMMAND_TOO_SHORT = (2, "Received command was too short")
+    SEQUENCE_NUMBER_INVALID = (3, "Sequence number of the received command is invalid")
 
 class MdfuProtocolError(Exception):
     """Generic MDFU exception
@@ -103,12 +106,27 @@ class MdfuCmdNotSupportedError(MdfuProtocolError):
 class MdfuClientInfoError(MdfuProtocolError):
     """MDFU exception if client information is invalid
     """
+
+class MdfuVersionError(MdfuProtocolError):
+    """MDFU exception for host client MDFU protocol version incompatibility.
+
+    This exception is raised when client reported MDFU protocol version is higher than
+    the host implemented version.
+    """
+
 class MdfuStatusInvalidError(MdfuProtocolError):
     """MDFU exception for an invalid MDFU packet status
     """
 
+class MdfuUpdateError(MdfuProtocolError):
+    """MDFU exception for a failed firmware update
+    """
+# pylint: disable-next=too-few-public-methods
+class MdfuPacket():
+    """MDFU packet class
+    """
 
-class InterTransactionDelay(object):
+class InterTransactionDelay:
     """
     Represents a delay between transactions in seconds.
 
@@ -129,8 +147,8 @@ class InterTransactionDelay(object):
         :type value: float
         """
         if value > self.MAX_INTER_TRANSACTION_DELAY_SECONDS:
-            raise ValueError("Inter transaction delay is too long."
-                             f"Valid values are 0 <= delay < {self.MAX_INTER_TRANSACTION_DELAY_SECONDS} seconds")
+            raise ValueError("Inter transaction delay is too long. Valid values are "
+                             f"0 <= delay < {self.MAX_INTER_TRANSACTION_DELAY_SECONDS} seconds")
         if value < 0:
             raise ValueError("Inter transaction delay must be a positive value")
         # store as ns value
@@ -184,11 +202,6 @@ class InterTransactionDelay(object):
         :rtype: bytes
         """
         return self.value.to_bytes(4, byteorder="little")
-
-# pylint: disable-next=too-few-public-methods
-class MdfuPacket():
-    """MDFU packet class
-    """
 
 class MdfuCmdPacket(MdfuPacket):
     """MDFU command packet
@@ -374,9 +387,7 @@ def verify_checksum(data, checksum):
     else:
         calculated_checksum = calculate_checksum(data)
 
-    if checksum != calculated_checksum:
-        return False
-    return True
+    return checksum == calculated_checksum
 
 class ClientInfo():
     """Class to handle MDFU client information
@@ -391,6 +402,7 @@ class ClientInfo():
     SECONDS_PER_LSB = 0.1
     LSBS_PER_SECOND = 10
 
+    #pylint: disable=too-many-positional-arguments
     def __init__(self, version: Version, buffer_count: int, buffer_size: int,
                     default_timeout: float, timeouts: dict = None, inter_transaction_delay = None):
         """Class initialization
@@ -529,7 +541,8 @@ Command timeouts
             version = Version(f"{data[0]}.{data[1]}.{data[2]}-alpha{data[3]}")
         else:
             raise ValueError("Invalid parameter length for MDFU client protocol version" + \
-                             f"Expected {cls.BUFFER_INFO_SIZE} but got {length}")
+                             f"Expected a size of {cls.PROTOCOL_VERSION_SIZE} or " + \
+                             f"{cls.PROTOCOL_VERSION_INTERNAL_SIZE} but got {length}")
         return version
 
     @classmethod
@@ -561,7 +574,7 @@ Command timeouts
                 cmd = MdfuCmd(data[0])
                 cmd_timeouts[cmd] = timeout
             data = data[3:]
-        if not default_timeout:
+        if default_timeout is None:
             raise ValueError("No required default timeout is present in client info")
         return default_timeout, cmd_timeouts
 
